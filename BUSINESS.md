@@ -54,4 +54,33 @@
 
 未包含节假日、活动和休园因素；缓冲不是置信区间；不处理多档口混合数据。
 
-这是具名模拟客户的可运行工作流样本，seed为固定生成的模拟观测。内部定时归档保存结果供复核，不会向外部联系人发送消息。独立单元测试在 test-artifacts/gb-1014/tests/test_business.py，容器与页面验收由批次测试记录给出。
+## 厨房备餐与跨档口调拨
+
+在需求预估与批准建议之上，厨房把已备好的餐跨档口调拨，避免一边剩餐一边缺餐。
+
+### 实体与口径
+
+- 档口 Stall、餐品 Dish：库存持有单位与最小品类。
+- 备餐方案 PrepPlan：每日按**已批准**分析建议建立（可关联 approved_job_id），经负责人批准后才可登记实备；同 日期×档口×餐品 唯一。
+- 备餐台账 PrepEntry：实备**分次登记**，批次号自增；领用耗用 Consumption 逐笔记录并回写批次已耗量。
+- 调拨单 TransferOrder 与事件 TransferEvent：见下方状态机。
+- 库存余额 StockBalance（档口×餐品）：`可用 = 实备 + 接收 - 耗用 - 调出 + 退回`，是并发安全投影；台账为追溯真相源，守恒接口双向比对余额与台账聚合。
+
+### 调拨状态机与守恒
+
+待发 pending →（调出确认 dispatch）→ 在途 in_transit → 结清。
+
+- 调出确认后餐量进入**在途**，立即从调出档口可用量扣减；**接收确认才计入**接收档口可用量。
+- 接收与退回同一时刻只认一方；先部分接收后只允许退回在途余量，退回回到原档口。
+- 结清三态：全量接收 `completed_received`、全量退回 `completed_returned`、部分接收+余量退回 `partially_settled`。
+- 每单恒等式：`调出量 = 接收量 + 退回量 + 在途余量`。
+- 全局守恒：每道餐 `实备总量 = 各档口(可用 + 累计耗用) + 全局在途量`，由 `/kitchen/conservation` 复核。
+
+### 并发、幂等与可恢复
+
+- 调出/领用对余额执行**带条件的原子 UPDATE**（`WHERE 可用量 >= 申请量`），MySQL/InnoDB 另加 `SELECT … FOR UPDATE` 行锁；并发调出同一份餐最多一笔成功，绝不超扣。
+- 实备登记、领用、调拨创建与调出/接收/退回均接受 `idempotency_key`：唯一约束 + processing/completed 三态记录，响应丢失后带同键重试只回放首次结果、不重复记账；业务失败整体回滚可安全重试，中断遗留的 processing 占位由 `/kitchen/idempotency/recover` 释放。
+- 处理中断后 `/transfers/{id}/recover` 按数量恒等式重算结清状态。
+- 每笔调拨的待发→在途→部分接收→结清数量变化逐笔落 TransferEvent，页面可追查并关联备餐方案。
+
+这是具名模拟客户的可运行工作流样本，seed为固定生成的模拟观测。内部定时归档保存结果供复核，不会向外部联系人发送消息。独立单元测试在 test-artifacts/gb-1014/tests/test_business.py 与 test-artifacts/kitchen-transfer/（后端 pytest 15 项、前端 jsdom 26 项），容器与页面验收由批次测试记录给出。

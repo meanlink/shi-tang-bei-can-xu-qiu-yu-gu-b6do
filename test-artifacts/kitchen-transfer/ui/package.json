@@ -1,0 +1,13 @@
+{
+  "name": "kitchen-transfer-ui-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "厨房备餐与跨档口调拨前端 jsdom 验收（不打包源码，独立运行）",
+  "scripts": {
+    "test": "node kitchen.ui.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
